@@ -1,0 +1,4 @@
+Fecha,Defecto,Descripcion,Estado
+2025-11-06,Error en enlace,El enlace a la fuente 2 no era el correcto,Corregido
+2025-11-07,Dato faltante,Faltaban 2 semanas en la serie de prueba,Corregido
+2025-11-08,Error de sintaxis en YAML,El cron del workflow tenia un formato incorrecto,Corregido

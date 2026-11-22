@@ -1,0 +1,32 @@
+{
+  "_comentario": "Catálogo de series de la capa Bronce. Los IDs con 'PENDIENTE' se omiten (con aviso) hasta que se reemplacen por la clave real del Constructor de consultas del BIE de INEGI.",
+  "user_agent": "ObservatorioComercioColima/0.1 (proyecto academico TecNM Colima; contacto: CORREO_DEL_EQUIPO)",
+  "pausa_entre_peticiones_seg": 2,
+  "min_periodos": 36,
+  "fuentes": {
+    "inegi": {
+      "base_url": "https://www.inegi.org.mx/app/api/indicadores/desarrolladores/jsonxml/INDICATOR/{id}/es/{area}/false/{banco}/2.0/{token}?type=json",
+      "robots_url": "https://www.inegi.org.mx/robots.txt",
+      "token_env": "INEGI_TOKEN",
+      "series": [
+        {"clave": "emec_menor_ingresos_colima",       "id": "PENDIENTE", "area": "00", "banco": "BIE", "descripcion": "EMEC - Comercio al por menor (46) - Ingresos reales por suministro de bienes y servicios, índice 2018=100 - Colima"},
+        {"clave": "emec_menor_personal_colima",       "id": "PENDIENTE", "area": "00", "banco": "BIE", "descripcion": "EMEC - Comercio al por menor (46) - Personal ocupado total, índice 2018=100 - Colima"},
+        {"clave": "emec_menor_remuneraciones_colima", "id": "PENDIENTE", "area": "00", "banco": "BIE", "descripcion": "EMEC - Comercio al por menor (46) - Remuneraciones medias reales, índice 2018=100 - Colima"},
+        {"clave": "emec_menor_ingresos_jalisco",      "id": "PENDIENTE", "area": "00", "banco": "BIE", "descripcion": "EMEC - Comercio al por menor - Ingresos reales - Jalisco (grupo de comparación E3)"},
+        {"clave": "emec_menor_ingresos_michoacan",    "id": "PENDIENTE", "area": "00", "banco": "BIE", "descripcion": "EMEC - Comercio al por menor - Ingresos reales - Michoacán (grupo de comparación E3)"},
+        {"clave": "emec_menor_ingresos_nayarit",      "id": "PENDIENTE", "area": "00", "banco": "BIE", "descripcion": "EMEC - Comercio al por menor - Ingresos reales - Nayarit (grupo de comparación E3)"},
+        {"clave": "inpc_general_nacional",            "id": "628194",    "area": "00", "banco": "BIE", "descripcion": "INPC índice general (base 2Q jul 2018=100) - Nacional. Verificar ID en el Constructor de consultas."}
+      ]
+    },
+    "banxico": {
+      "base_url": "https://www.banxico.org.mx/SieAPIRest/service/v1/series/{id}/datos/{inicio}/{fin}",
+      "robots_url": "https://www.banxico.org.mx/robots.txt",
+      "token_env": "BANXICO_TOKEN",
+      "fecha_inicio": "2015-01-01",
+      "series": [
+        {"clave": "tiie_28d",        "id": "SF43783", "descripcion": "TIIE a 28 días (tasa de interés interbancaria)"},
+        {"clave": "tipo_cambio_fix", "id": "SF43718", "descripcion": "Tipo de cambio FIX pesos por dólar"}
+      ]
+    }
+  }
+}

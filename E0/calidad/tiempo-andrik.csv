@@ -1,0 +1,6 @@
+fecha,inicio,fin,interrupcion_min,delta_min,fase,actividad,entregable,comentarios
+2026-11-05,,,0,,Planeacion,Lectura de la consigna E0 y definicion del sector,docs/E0/propuesta.md,Registrar horas reales
+2026-11-07,,,0,,Planeacion,Creacion del repositorio en GitHub,repositorio,
+2026-11-18,,,0,,Diseno,Seleccion de fuentes (INEGI EMEC y Banxico SIE) y analisis etico,docs/E0/propuesta.md,
+2026-11-18,,,0,,Codificacion,Extractor de capa Bronce y workflow de GitHub Actions,src/extractor_bronce.py,
+2026-11-18,,,0,,Pruebas,Pruebas unitarias sin red y ejecucion dry-run,tests/test_extractor.py,

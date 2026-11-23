@@ -46,7 +46,15 @@ def _unidad_consistente(df: pd.DataFrame) -> pd.Series:
     return df["unidad"].eq(esperada)
 
 
+def _linaje_completo(df: pd.DataFrame) -> pd.Series:
+    """Todo valor observado debe apuntar a su archivo Bronce y a su fecha de ingesta.
+    Solo los meses que la fuente no publicó (origen = mes_ausente_en_fuente) no tienen origen."""
+    tiene = (df["id_bronce"].fillna("").astype(str).str.len() > 0) & df["captura"].notna()
+    return tiene | df["origen"].eq("mes_ausente_en_fuente")
+
+
 MOTIVOS = {
+    "linaje_completo": "El registro no tiene archivo Bronce de origen o fecha de ingesta",
     "valor_numerico_o_faltante": "El valor original no es numérico ni un faltante declarado por la fuente",
     "valor_en_rango_de_su_variable": "Valor fuera del rango plausible definido para su variable",
     "unidad_consistente": "La unidad no coincide con la del catálogo de la serie",
@@ -75,12 +83,16 @@ def construir_esquema(hoy: pd.Timestamp | None = None) -> pa.DataFrameSchema:
             "valor": pa.Column(float, nullable=True),          # los faltantes se imputan después
             "captura": pa.Column("datetime64[ns]", nullable=True),
             "archivo": pa.Column(str, nullable=True),
+            "ruta_bronce": pa.Column(str, nullable=True),     # linaje: archivo crudo de origen
+            "sha256_bronce": pa.Column(str, nullable=True),   # linaje: huella del archivo
+            "id_bronce": pa.Column(str, nullable=True),       # linaje: archivo + periodo
             "origen": pa.Column(str, nullable=False),
         },
         checks=[
             pa.Check(_valor_numerico_o_faltante, name="valor_numerico_o_faltante"),
             pa.Check(_valor_en_rango_de_su_variable, name="valor_en_rango_de_su_variable"),
             pa.Check(_unidad_consistente, name="unidad_consistente"),
+            pa.Check(_linaje_completo, name="linaje_completo"),
         ],
         unique=["serie", "fecha"],
         strict=True,

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src import calidad, integracion, limpieza, pipeline  # noqa: E402
+from src import calidad, integracion, limpieza, linaje, pipeline  # noqa: E402
 from src.demo_datos import generar  # noqa: E402
 
 
@@ -92,6 +92,32 @@ class TestPipelineDemo(unittest.TestCase):
         self.assertEqual(set(panel["temporada"]), {"alta", "baja"})
         ent = pd.read_csv(self.salida / "oro" / "panel_entidades.csv")
         self.assertEqual(ent["entidad"].nunique(), 4)
+
+    # ---------------- linaje (E2)
+    def test_cada_fila_de_oro_tiene_linaje(self):
+        for tabla in ["panel_colima_mensual", "panel_entidades"]:
+            t = pd.read_csv(self.salida / "oro" / f"{tabla}.csv")
+            self.assertTrue(t["archivos_bronce"].notna().all(), tabla)
+            self.assertTrue(t["fecha_ingesta"].notna().all(), tabla)
+            self.assertTrue(t["id_fila_oro"].is_unique, tabla)
+
+    def test_linaje_llega_al_archivo_bronce_y_no_cambio(self):
+        lin = pd.read_csv(self.salida / "oro" / "linaje_oro.csv")
+        self.assertTrue(linaje.verificar(lin).empty)
+        obs = lin[lin["metodo"].eq("observado")]
+        self.assertTrue(obs["id_bronce"].str.contains("#").all())
+
+    def test_imputado_apunta_a_sus_vecinos(self):
+        lin = pd.read_csv(self.salida / "oro" / "linaje_oro.csv")
+        imp = lin[lin["metodo"].eq("interpolacion_lineal")]
+        self.assertGreater(len(imp), 0)
+        self.assertTrue(imp["vecino_anterior"].notna().all() and imp["vecino_posterior"].notna().all())
+
+    def test_promedio_banxico_cita_rango_de_dias(self):
+        plata = pd.read_csv(self.salida / "plata" / "plata_largo.csv")
+        tiie = plata[plata["serie"].eq("tiie_28d")]
+        self.assertTrue(tiie["id_bronce"].str.contains(r"#\d{2}/\d{2}/\d{4}\.\.").all())
+        self.assertTrue(plata["id_registro"].is_unique)
 
     def test_reporte_json(self):
         r = json.loads((self.salida / "reportes" / "reporte_calidad.json").read_text(encoding="utf-8"))

@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import config, limpieza
+from . import config, limpieza, linaje
 from .calidad import PuertaCerrada, aplicar_puerta
 from .integracion import integrar
 
@@ -119,8 +119,8 @@ def construir_oro(limpio: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], dict]:
             "personal": df.get(f"personal_{col.split('_', 1)[1]}"),
             "remuneraciones": df.get(f"remuneraciones_{col.split('_', 1)[1]}"),
         }, index=df.index).join(tiempo[["trimestre", "anio"]]))
-    panel_entidades = (pd.concat(entidades).reset_index(names="fecha")
-                       if entidades else pd.DataFrame())
+    panel_entidades = (pd.concat(entidades).reset_index(names="fecha").dropna(subset=["ingresos"])
+                       .reset_index(drop=True) if entidades else pd.DataFrame())
 
     info = {"fin_entrenamiento": str(fin_entrenamiento.date()),
             "variables_seleccionadas": seleccion,
@@ -142,6 +142,7 @@ def correr(bronce: Path | None = None, salida: Path | None = None) -> dict:
     validos, cuarentena, puerta = aplicar_puerta(largo, r)
     log.info("Puerta de Calidad: %d válidos, %d a cuarentena", puerta["registros_validos"],
              puerta["registros_en_cuarentena"])
+    validos = linaje.asignar_id_registro(validos)
     validos.to_csv(r.plata / "plata_largo.csv", index=False)
 
     ancho = a_ancho(validos)
@@ -155,6 +156,10 @@ def correr(bronce: Path | None = None, salida: Path | None = None) -> dict:
     limpio.reset_index(names="fecha").to_csv(r.plata / "plata_ancho_limpio.csv", index=False)
 
     tablas, oro = construir_oro(limpio)
+    tablas, linaje_oro = linaje.construir_linaje(tablas, validos, detalle["metodos"], NOMBRE_COLUMNA,
+                                                 linaje.prefijo_bronce(r.bronce))
+    linaje_oro.to_csv(r.oro / "linaje_oro.csv", index=False)
+    problemas = linaje.verificar(linaje_oro) if len(linaje_oro) else pd.DataFrame()
     for nombre, tabla in tablas.items():
         tabla.to_csv(r.oro / f"{nombre}.csv", index=False)
     (r.oro / "parametros_escalado.json").write_text(
@@ -171,6 +176,14 @@ def correr(bronce: Path | None = None, salida: Path | None = None) -> dict:
             "por_tratamiento": detalle["atipicos"]["tratamiento"].value_counts().to_dict(),
         },
         "oro": {k: v for k, v in oro.items() if k != "parametros_escalado"},
+        "linaje": {
+            "celdas_rastreadas": int(len(linaje_oro)),
+            "filas_oro_sin_linaje": int(sum(t["archivos_bronce"].fillna("").eq("").sum()
+                                            for t in tablas.values() if "archivos_bronce" in t)),
+            "archivos_bronce_citados": int(linaje_oro["ruta_bronce"].replace("", np.nan).nunique())
+            if len(linaje_oro) else 0,
+            "archivos_con_problema": int(len(problemas)),
+        },
     }
     (r.reportes / "reporte_calidad.json").write_text(
         json.dumps(reporte, indent=2, ensure_ascii=False, default=str), encoding="utf-8")

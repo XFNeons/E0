@@ -1,0 +1,6 @@
+fecha,inicio,fin,interrupcion_min,delta_min,fase,actividad,entregable,comentarios
+2026-11-23,,,0,,Planeacion,Eleccion de fuente especializada (DENUE) y diseno de linaje,docs/E2/ENTREGA.md,Registrar horas reales
+2026-11-23,,,0,,Codificacion,Linaje Oro-Plata-Bronce en el pipeline E1,E1/e1/src/linaje.py,
+2026-11-23,,,0,,Codificacion,Extractor DENUE y procesamiento geoespacial,src/extractor_denue.py; src/geo.py,
+2026-11-23,,,0,,Documentacion,Declaracion de etica y legalidad,docs/etica-datos.md,
+2026-11-23,,,0,,Pruebas,Pruebas de linaje y DENUE sintetico,tests/test_geo.py,

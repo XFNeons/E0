@@ -1,0 +1,5 @@
+id,fecha,tipo,fase_inyeccion,fase_remocion,tiempo_correccion_min,archivo,descripcion
+1,2026-11-23,80-Funcion,Codificacion,Pruebas,,E1/e1/src/linaje.py,Celdas imputadas cuyo original estaba en cuarentena no tenian vecinos; se buscan vecinos por la llave pedida
+2,2026-11-23,70-Datos,Codificacion,Pruebas,,E1/e1/src/pipeline.py,Panel por entidad incluia meses sin publicar (filas sin linaje); se eliminan
+3,2026-11-23,80-Funcion,Codificacion,Pruebas,,src/geo.py,CLEE duplicado mandaba a cuarentena tambien el registro valido; se separan duplicados exactos
+4,2026-11-23,70-Datos,Codificacion,Pruebas,,src/geo.py,archivos_bronce de Oro sin prefijo de ruta; se normaliza al leer Bronce

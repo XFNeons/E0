@@ -1,4 +1,4 @@
-name: Captura Bronce y pipeline Plata-Oro
+name: Captura Bronce, pipeline Plata-Oro y capa geoespacial
 
 on:
   schedule:
@@ -44,6 +44,16 @@ jobs:
           BANXICO_TOKEN: ${{ secrets.BANXICO_TOKEN }}
         run: python src/extractor_bronce.py
 
+      - name: E2 - captura DENUE (primer lunes del mes o ejecución manual)
+        env:
+          DENUE_TOKEN: ${{ secrets.DENUE_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date -u +%d)" -le 7 ]; then
+            python ../E2/e2/src/extractor_denue.py
+          else
+            echo "El DENUE se actualiza pocas veces al año: captura solo el primer lunes del mes"
+          fi
+
       - name: E1 - instalar dependencias del pipeline
         working-directory: E1/e1
         run: pip install -r requirements.txt
@@ -61,6 +71,28 @@ jobs:
           if [ $codigo -eq 3 ]; then echo "::warning::Aún no hay datos en Bronce; se omite el pipeline"; exit 0; fi
           exit $codigo
 
+      - name: E2 - instalar dependencias geoespaciales
+        working-directory: E2/e2
+        run: pip install -r requirements.txt
+
+      - name: E2 - pruebas (DENUE sintético, GeoPandas)
+        working-directory: E2/e2
+        run: python -m unittest discover -s tests -v
+
+      - name: E2 - DENUE -> Puerta de Calidad -> GeoPandas -> Oro y mapas
+        working-directory: E2/e2
+        run: |
+          set +e
+          python -m src.geo
+          codigo=$?
+          if [ $codigo -eq 3 ]; then echo "::warning::Aún no hay capturas del DENUE"; exit 0; fi
+          exit $codigo
+
+      - name: E1/E2 - verificar linaje Oro -> Bronce
+        working-directory: E1/e1
+        run: |
+          if [ -f data/oro/linaje_oro.csv ]; then python -m src.linaje --verificar; fi
+
       - name: Guardar datos en el repositorio
         working-directory: .
         run: |
@@ -68,6 +100,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add E0/data/bronze
           git add E1/e1/data 2>/dev/null || true
+          git add E2/e2/data E2/e2/docs/E2/img 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Sin cambios en los datos"
           else

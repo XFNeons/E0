@@ -9,9 +9,16 @@ Discrepancias que se resuelven aquí:
   * Revisiones: si la misma serie y periodo aparece en varias capturas con valores distintos
     (INEGI revisa cifras preliminares), gana la captura más reciente y el conflicto se registra.
   * Nombres: cada serie se mapea a (entidad, variable, unidad, fuente) con config.SERIES.
+
+Linaje: cada registro lleva desde aquí
+  * ruta_bronce   archivo crudo de origen (relativo a la carpeta Bronce)
+  * sha256_bronce huella del archivo, para comprobar que no cambió después
+  * id_bronce     ruta + periodo exacto (o rango de días si es un promedio mensual)
+  * captura       fecha y hora UTC de ingesta (la escribe el extractor en el nombre del archivo)
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -20,8 +27,7 @@ import pandas as pd
 
 from . import config
 
-COLUMNAS_LARGO = ["serie", "fuente", "entidad", "variable", "unidad", "fecha",
-                  "valor_crudo", "valor", "captura", "archivo"]
+COLUMNAS_LINAJE = ["captura", "archivo", "ruta_bronce", "sha256_bronce", "id_bronce"]
 
 
 # ------------------------------------------------------------------ lectura de Bronce
@@ -49,13 +55,18 @@ def leer_bronce(dir_bronce: Path) -> pd.DataFrame:
     for fuente, lector in LECTORES.items():
         for archivo in sorted((dir_bronce / fuente).glob("*/*.json")):
             serie = archivo.parent.name
-            payload = json.loads(archivo.read_text(encoding="utf-8"))
+            crudo = archivo.read_bytes()
+            payload = json.loads(crudo)
+            ruta = archivo.relative_to(dir_bronce).as_posix()
+            huella = hashlib.sha256(crudo).hexdigest()
+            captura = _fecha_captura(archivo)
             for periodo, valor in lector(payload):
                 registros.append({"serie": serie, "fuente": fuente, "periodo_crudo": periodo,
                                   "valor_crudo": None if valor is None else str(valor),
-                                  "captura": _fecha_captura(archivo), "archivo": archivo.name})
+                                  "captura": captura, "archivo": archivo.name, "ruta_bronce": ruta,
+                                  "sha256_bronce": huella, "id_bronce": f"{ruta}#{periodo}"})
     return pd.DataFrame(registros, columns=["serie", "fuente", "periodo_crudo", "valor_crudo",
-                                            "captura", "archivo"])
+                                            *COLUMNAS_LINAJE])
 
 
 # ------------------------------------------------------------------ tipado
@@ -120,8 +131,14 @@ def a_mensual(df: pd.DataFrame) -> pd.DataFrame:
     agregadas = (diarias_ok.groupby(["serie", "fuente", "entidad", "variable", "unidad", "mes"],
                                     dropna=False)
                  .agg(valor=("valor", "mean"), n_dias=("valor", "size"),
-                      captura=("captura", "max"), archivo=("archivo", "last"))
+                      captura=("captura", "max"), archivo=("archivo", "last"),
+                      ruta_bronce=("ruta_bronce", "last"), sha256_bronce=("sha256_bronce", "last"),
+                      primer_dia=("periodo_crudo", "first"), ultimo_dia=("periodo_crudo", "last"))
                  .reset_index())
+    # Linaje de un promedio: el archivo y el rango de días que se promediaron
+    agregadas["id_bronce"] = (agregadas["ruta_bronce"] + "#" + agregadas["primer_dia"].astype(str)
+                              + ".." + agregadas["ultimo_dia"].astype(str))
+    agregadas = agregadas.drop(columns=["primer_dia", "ultimo_dia"])
     agregadas["valor_crudo"] = agregadas["valor"].round(6).astype(str)
     agregadas["origen"] = "promedio_mensual_de_" + agregadas["n_dias"].astype(str) + "_dias"
 
@@ -153,7 +170,8 @@ def completar_calendario(df: pd.DataFrame) -> pd.DataFrame:
                 "serie": serie, "fuente": base["fuente"], "entidad": base["entidad"],
                 "variable": base["variable"], "unidad": base["unidad"], "fecha": faltan,
                 "valor_crudo": None, "valor": np.nan, "captura": pd.NaT,
-                "archivo": "", "origen": "mes_ausente_en_fuente"}))
+                "archivo": "", "ruta_bronce": "", "sha256_bronce": "", "id_bronce": "",
+                "origen": "mes_ausente_en_fuente"}))
     return pd.concat([df, *piezas], ignore_index=True) if piezas else df
 
 

@@ -1,85 +1,87 @@
-"""
-CONFIGURACION DEL PIPELINE E1 -- Observatorio de precios de abasto (SNIIM / central de abastos)
+"""Configuración del pipeline E1 (Bronce -> Plata -> Oro).
 
-*** Este es el unico archivo que deben ajustar. ***
-Datos esperados en Bronce (una fila = un producto/calidad/presentacion/origen en una fecha):
-  Producto | Calidad | Presentacion | Origen | Precio Min | Precio Max | Precio Frec | Obs. (+ fecha)
-Los encabezados se comparan SIN acentos, mayusculas ni puntos, asi que "Precio Mín" == "precio min".
+Rutas relativas a la raíz del repositorio:
+    E0/data/bronze/        capa Bronce (la escribe el extractor de E0, no se modifica aquí)
+    E1/e1/data/plata/      registros que pasaron la Puerta de Calidad
+    E1/e1/data/cuarentena/ registros rechazados, con motivo (append-only, nunca se borran)
+    E1/e1/data/oro/        tablas analíticas listas para E1-E3
+    E1/e1/data/reportes/   reporte de calidad y bitácora de decisiones
 """
+from __future__ import annotations
+
+from dataclasses import dataclass
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parents[1]
+PAQUETE = Path(__file__).resolve().parents[1]          # E1/e1
+REPO = PAQUETE.parents[1]                               # raíz del repositorio
 
 
-def rutas(base=None):
-    """Carpetas de las capas. base=None -> data/ del repositorio."""
-    base = Path(base) if base else RAIZ / "data"
-    return {
-        "bronce": base / "bronce",
-        "plata": base / "plata",
-        "oro": base / "oro",
-        "cuarentena": base / "cuarentena",
-        "reportes": base / "reportes",
-    }
+@dataclass(frozen=True)
+class Rutas:
+    bronce: Path
+    plata: Path
+    cuarentena: Path
+    oro: Path
+    reportes: Path
+
+    def crear(self) -> "Rutas":
+        for p in (self.plata, self.cuarentena, self.oro, self.reportes):
+            p.mkdir(parents=True, exist_ok=True)
+        return self
 
 
+def rutas(bronce: Path | None = None, salida: Path | None = None) -> Rutas:
+    salida = salida or PAQUETE / "data"
+    return Rutas(
+        bronce=bronce or REPO / "E0" / "data" / "bronze",
+        plata=salida / "plata",
+        cuarentena=salida / "cuarentena",
+        oro=salida / "oro",
+        reportes=salida / "reportes",
+    )
 
-FUENTES = {
-    "A": {
-        "patron": "*.csv",
-        "col_fecha": "fecha",
-        "fecha_en_archivo": r"(\d{4}-\d{2}-\d{2})",
-        "dayfirst": True,
-        "renombrar": {
-            "producto": "producto", "calidad": "calidad", "presentacion": "presentacion",
-            "origen": "origen", "precio min": "precio_min", "precio max": "precio_max",
-            "precio frec": "precio_frec", "obs": "obs",
-        },
-    },
-   
+
+# ---------------------------------------------------------------- catálogo de series
+# clave (carpeta en Bronce) -> metadatos que unifican el esquema de las dos fuentes
+SERIES: dict[str, dict] = {
+    "emec_menor_ingresos_colima":       {"entidad": "Colima",    "variable": "ingresos",       "unidad": "indice_2018"},
+    "emec_menor_personal_colima":       {"entidad": "Colima",    "variable": "personal",       "unidad": "indice_2018"},
+    "emec_menor_remuneraciones_colima": {"entidad": "Colima",    "variable": "remuneraciones", "unidad": "indice_2018"},
+    "emec_menor_ingresos_jalisco":      {"entidad": "Jalisco",   "variable": "ingresos",       "unidad": "indice_2018"},
+    "emec_menor_ingresos_michoacan":    {"entidad": "Michoacán", "variable": "ingresos",       "unidad": "indice_2018"},
+    "emec_menor_ingresos_nayarit":      {"entidad": "Nayarit",   "variable": "ingresos",       "unidad": "indice_2018"},
+    "inpc_general_nacional":            {"entidad": "Nacional",  "variable": "inpc",           "unidad": "indice_2q_jul_2018"},
+    "tiie_28d":                         {"entidad": "Nacional",  "variable": "tiie",           "unidad": "porcentaje"},
+    "tipo_cambio_fix":                  {"entidad": "Nacional",  "variable": "tipo_cambio",    "unidad": "pesos_por_dolar"},
 }
 
-# ---------------------------------------------------------------- VARIABLES
-CLAVES_SERIE = ["producto", "calidad", "presentacion", "origen"]   # definen UNA serie de precios
-GRUPO = "serie"                                  # columna compuesta (se crea sola)
-LLAVES = ["periodo"] + CLAVES_SERIE              # llave unica de un registro
-VARIABLE_OBJETIVO = "precio_frec"                # lo que se pronosticara (E1 de la propuesta)
-COVARIABLES = ["precio_min", "precio_max"]
-NUMERICAS = [VARIABLE_OBJETIVO] + COVARIABLES
-
-NULOS = ["n/d", "nd", "s/d", "na", "n/a", "-", "--", "", "null", "none"]   # = dato faltante (NO error)
-
-# Rangos validos (min, max) -> fuera de rango = cuarentena. AJUSTEN a sus productos/presentaciones.
-RANGOS = {"precio_frec": (0.01, 50_000.0), "precio_min": (0.01, 50_000.0), "precio_max": (0.01, 50_000.0)}
-# Reglas de coherencia entre columnas: (a, b) significa  a <= b
-COHERENCIA = [("precio_min", "precio_frec"), ("precio_frec", "precio_max")]
-PERIODO_MIN = "2000-01-01"
-
-# Valores permitidos por columna clave (None/ausente = no se restringe). Usen texto NORMALIZADO
-# (minusculas, sin acentos). Ej.: {"calidad": ["primera", "extra", "segunda"]}
-VALIDOS = {}
-ALIAS = {}   # {"origen": {"mich": "michoacan"}}
-
-# Jerarquia conceptual geografica: origen -> macro-region (texto normalizado)
-MACRO_ORIGEN = {
-    "michoacan": "occidente", "jalisco": "occidente", "colima": "occidente", "nayarit": "occidente",
-    "sinaloa": "norte", "sonora": "norte", "baja california": "norte", "chihuahua": "norte",
-    "tamaulipas": "norte", "nuevo leon": "norte", "coahuila": "norte", "durango": "norte",
-    "guanajuato": "bajio-centro", "queretaro": "bajio-centro", "mexico": "bajio-centro",
-    "puebla": "bajio-centro", "morelos": "bajio-centro", "hidalgo": "bajio-centro",
-    "oaxaca": "sur-sureste", "chiapas": "sur-sureste", "veracruz": "sur-sureste",
-    "guerrero": "sur-sureste", "yucatan": "sur-sureste", "tabasco": "sur-sureste",
+# Rangos plausibles por variable para la Puerta de Calidad (fuera de rango -> cuarentena).
+# Los índices 2018=100 de la EMEC estatal han oscilado aprox. entre 40 y 200 (caída COVID incluida).
+RANGOS: dict[str, tuple[float, float]] = {
+    "ingresos": (20.0, 300.0),
+    "personal": (20.0, 300.0),
+    "remuneraciones": (20.0, 300.0),
+    "inpc": (50.0, 250.0),
+    "tiie": (0.0, 30.0),
+    "tipo_cambio": (5.0, 40.0),
 }
-CATEGORICAS_MAR = ["producto", "origen", "calidad", "anio"]   # contra que se prueba el faltante
 
-# ---------------------------------------------------------------- PARAMETROS
-FRECUENCIA_OBJETIVO = "M"       # frecuencia del Oro agregado y del conteo de periodos ("W" semanal)
-ALPHA_MAR = 0.05
-LIMITE_INTERPOLACION = 3        # max. observaciones consecutivas a interpolar
-MIN_OBS_SERIE = 8               # series con menos observaciones no se evaluan por atipicos
-Z_ROBUSTO_UMBRAL = 3.5
-IQR_K = 1.5
-IF_CONTAMINACION = 0.02
-CORR_MAX = 0.90
+FECHA_MIN = "2005-01-01"
+FALTANTES_DECLARADOS = {"", "N/E", "NE", "ND", "N/D", "NA", "-", "null", "None"}
+
+# Jerarquías conceptuales
+REGION = {"Colima": "Occidente", "Jalisco": "Occidente", "Michoacán": "Occidente",
+          "Nayarit": "Occidente", "Nacional": "Nacional"}
+SECTOR = {"ingresos": "46 Comercio al por menor", "personal": "46 Comercio al por menor",
+          "remuneraciones": "46 Comercio al por menor", "inpc": "Precios", "tiie": "Financiero",
+          "tipo_cambio": "Financiero"}
+MESES_TEMPORADA_ALTA = {7, 8, 11, 12}   # vacaciones de verano, Buen Fin y diciembre
+
+# Limpieza
+UMBRAL_Z_ROBUSTO = 3.5     # Iglewicz y Hoaglin (1993)
+FACTOR_IQR = 1.5
+CONTAMINACION_IFOREST = 0.05
+MESES_PRUEBA = 12          # los últimos 12 meses no se usan para ajustar escaladores (evita fuga de información)
+FECHA_INICIO_ORO = "2015-01-01"
+UMBRAL_CORRELACION = 0.95  # selección de variables: se descarta una de cada par más correlacionado
 SEMILLA = 42
-MIN_PERIODOS = 36               # requisito de la rubrica (E0)

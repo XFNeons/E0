@@ -1,0 +1,5 @@
+id,fecha,tipo,fase_inyeccion,fase_remocion,tiempo_correccion_min,archivo,descripcion
+1,2026-11-22,80-Funcion,Codificacion,Pruebas,,src/limpieza.py,Z-score sobre variacion mensual marcaba todos los eneros como atipicos; se resto el patron estacional
+2,2026-11-22,70-Datos,Codificacion,Pruebas,,src/integracion.py,Dia no numerico de Banxico duplicaba el mes y mandaba a cuarentena el promedio valido; se conserva la fecha diaria
+3,2026-11-22,20-Sintaxis,Codificacion,Pruebas,,src/calidad.py,Conversion a texto dejaba NaN y rompia el join de motivos; se convierte valor por valor
+4,2026-11-22,80-Funcion,Codificacion,Pruebas,,docs/E1/limpieza.ipynb,Deteccion de datos reales siempre verdadera (any sobre generadores); se corrigio

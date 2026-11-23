@@ -1,42 +1,103 @@
+"""Pruebas del pipeline E1 con la Bronce sintética (sin red). Correr desde E1/e1:
+    python -m unittest discover -s tests -v
+"""
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
-from src import config as C
-from src import limpieza as L
-from src.demo_datos import generar
-from src.pipeline import ejecutar
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src import calidad, integracion, limpieza, pipeline  # noqa: E402
+from src.demo_datos import generar  # noqa: E402
 
 
-def test_a_numero_formatos():
-    r = L.a_numero(pd.Series(["1,234.50", "1234,5", "$99", "abc", None]))
-    assert r.iloc[0] == 1234.5 and r.iloc[1] == 1234.5 and r.iloc[2] == 99
-    assert pd.isna(r.iloc[3]) and pd.isna(r.iloc[4])
+class TestPipelineDemo(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.bronce = generar(cls.tmp / "bronce")
+        cls.salida = cls.tmp / "salida"
+        cls.reporte = pipeline.correr(cls.bronce, cls.salida)
+        cls.cuarentena = pd.read_csv(cls.salida / "cuarentena" / "cuarentena.csv")
+
+    # ---------------- integración
+    def test_revision_resuelta_con_la_ultima_captura(self):
+        self.assertEqual(self.reporte["integracion"]["conflictos_de_revision"], 1)
+        plata = pd.read_csv(self.salida / "plata" / "plata_largo.csv", parse_dates=["fecha"])
+        ultimo = plata[plata.serie.eq("emec_menor_ingresos_colima")].sort_values("fecha").iloc[-1]
+        self.assertEqual(ultimo["archivo"], "2026-11-16_131700.json")
+
+    def test_banxico_diario_agregado_a_mensual(self):
+        plata = pd.read_csv(self.salida / "plata" / "plata_largo.csv", parse_dates=["fecha"])
+        tiie = plata[plata.serie.eq("tiie_28d")]
+        self.assertTrue((tiie["fecha"].dt.day == 1).all())
+        self.assertFalse(tiie.duplicated("fecha").any())
+
+    def test_coma_de_miles(self):
+        self.assertEqual(integracion.parsear_valor(pd.Series(["1,234.5"])).iloc[0], 1234.5)
+
+    # ---------------- puerta de calidad / cuarentena
+    def test_cuarentena_con_motivo(self):
+        self.assertTrue(self.cuarentena["motivo"].notna().all())
+        crudos = set(self.cuarentena["valor_crudo"].astype(str))
+        for esperado in ["1O4.2", "-5", "abc"]:
+            self.assertIn(esperado, crudos)
+        self.assertTrue(self.cuarentena["serie"].eq("serie_desconocida").any())
+
+    def test_nada_se_pierde_en_silencio(self):
+        p = self.reporte["puerta_de_calidad"]
+        self.assertEqual(p["registros_evaluados"], p["registros_validos"] + p["registros_en_cuarentena"])
+
+    def test_faltante_declarado_no_va_a_cuarentena(self):
+        self.assertFalse(self.cuarentena["valor_crudo"].astype(str).eq("N/E").any())
+
+    def test_falla_de_esquema_cierra_la_puerta(self):
+        df = pd.DataFrame({"serie": ["tiie_28d"]})
+        with self.assertRaises(calidad.PuertaCerrada):
+            calidad.aplicar_puerta(df)
+
+    # ---------------- limpieza
+    def test_imputacion(self):
+        metodos = self.reporte["celdas_por_metodo"]
+        self.assertEqual(metodos.get("interpolacion_lineal"), 5)
+        self.assertEqual(metodos.get("estacional_escalada"), 6)
+
+    def test_pico_reemplazado_y_covid_conservado(self):
+        at = pd.read_csv(self.salida / "reportes" / "atipicos.csv", parse_dates=["fecha"])
+        col = at[at.serie.eq("ingresos_colima")].set_index("fecha")["tratamiento"]
+        self.assertEqual(col[pd.Timestamp("2017-05-01")], "reemplazado_por_interpolacion")
+        self.assertEqual(col[pd.Timestamp("2020-04-01")], "conservado_evento_conocido")
+
+    def test_z_robusto_ignora_un_valor_extremo(self):
+        z = limpieza.z_robusto(pd.Series([1, 2, 3, 4, 100.0]))
+        self.assertGreater(z.iloc[-1], 3.5)
+        self.assertLess(abs(z.iloc[2]), 0.01)
+
+    # ---------------- oro
+    def test_escaladores_sin_fuga(self):
+        panel = pd.read_csv(self.salida / "oro" / "panel_colima_mensual.csv")
+        ent = panel[panel.conjunto.eq("entrenamiento")]
+        self.assertAlmostEqual(ent["ingresos_colima_minmax"].min(), 0.0, places=6)
+        self.assertAlmostEqual(ent["ingresos_colima_minmax"].max(), 1.0, places=6)
+        self.assertAlmostEqual(ent["ingresos_colima_z"].mean(), 0.0, places=6)
+
+    def test_discretizacion_y_jerarquias(self):
+        panel = pd.read_csv(self.salida / "oro" / "panel_colima_mensual.csv")
+        for col in ["temporada", "tiie_nivel", "crecimiento_ingresos", "trimestre", "semestre", "region"]:
+            self.assertIn(col, panel.columns)
+        self.assertEqual(set(panel["temporada"]), {"alta", "baja"})
+        ent = pd.read_csv(self.salida / "oro" / "panel_entidades.csv")
+        self.assertEqual(ent["entidad"].nunique(), 4)
+
+    def test_reporte_json(self):
+        r = json.loads((self.salida / "reportes" / "reporte_calidad.json").read_text(encoding="utf-8"))
+        self.assertIn("puerta_de_calidad", r)
+        self.assertTrue(np.isfinite(r["puerta_de_calidad"]["tasa_aprobacion"]))
 
 
-def test_normalizar_texto():
-    assert L.normalizar_texto(pd.Series(["  MICHOACÁN "])).iloc[0] == "michoacan"
-
-
-def test_pipeline_no_pierde_registros_en_silencio(tmp_path):
-    generar(tmp_path / "bronce")
-    rep = ejecutar(tmp_path)
-    cuar = pd.read_csv(tmp_path / "cuarentena" / "cuarentena.csv")
-    assert len(cuar) == rep["puerta_calidad"]["cuarentena"] > 0
-    assert (cuar["_motivo_cuarentena"].fillna("") != "").all()
-    # conservacion: bronce = plata + cuarentena
-    assert rep["filas_bronce"]["A"] == rep["puerta_calidad"]["validos"] + len(cuar)
-    assert rep["cumple_min_periodos"]
-
-
-def test_plata_coherente(tmp_path):
-    generar(tmp_path / "bronce")
-    ejecutar(tmp_path)
-    plata = pd.read_csv(tmp_path / "plata" / "plata.csv")
-    for col, (lo, hi) in C.RANGOS.items():
-        assert plata[col].notna().all() and plata[col].between(lo, hi).all()
-    assert not plata.duplicated(C.LLAVES).any()
-    assert (plata["precio_min"] <= plata["precio_max"]).all()
-
-
-def test_n_d_es_faltante_no_error(tmp_path):
-    generar(tmp_path / "bronce")
-    cuar_txt = ejecutar(tmp_path)["puerta_calidad"]["motivos"]
-    assert not any("precio_min no numerico" in m for m in cuar_txt)   # N/D se imputa, no se rechaza
+if __name__ == "__main__":
+    unittest.main()

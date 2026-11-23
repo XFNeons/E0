@@ -1,56 +1,94 @@
-# Ficha técnica de entrega — E1 (Capa Plata, Limpieza y Puerta de Calidad)
+# Ficha de entrega técnica — E1
 
-**Equipo:**  **Observatorio:** precios de abasto (SNIIM / central de abastos) 
- **Tag:** `e1`  **Fecha:** [13/11/2026]
-
-## 1. Cómo reproducir
-```bash
-pip install -r requirements.txt
-python -m pytest -q          # pruebas
-python -m src.pipeline       # Bronce -> Plata -> Oro (+ cuarentena y reporte)
-```
-Automatización: `.github/workflows/pipeline-e1.yml` (manual, en cada push a `src/` y semanal).
-
-## 2. Mapa de entregables
-| Requisito de la rúbrica | Dónde está |
+| Campo | Valor |
 |---|---|
-| Atípicos y ruido (IQR, Z robusto, Isolation Forest) | `src/limpieza.py::detectar_atipicos`, `tratar_atipicos` · notebook §5 |
-| Normalización Min-Max y Z-Score | `src/limpieza.py::normalizar` · notebook §6 |
-| Discretización y jerarquías conceptuales | `src/limpieza.py::discretizar` · notebook §6 |
-| Reducción (agregación, selección, muestreo) | `src/limpieza.py::agregar_periodo`, `seleccionar_variables`, `muestra_estratificada` · notebook §7 |
-| Integración y conflictos de esquema/tipos | `src/integracion.py` · notebook §1–2 |
-| Puerta de Calidad (Pandera) + cuarentena con motivo | `src/calidad.py` · `data/cuarentena/cuarentena.csv` |
-| Relatoría | `docs/relatoria-E1.md` |
+| Proyecto | Observatorio del Comercio al por Menor en Colima (OCMC) |
+| Repositorio | https://github.com/XFNeons/E0 (carpeta `E1/e1/`) |
+| Tag | `e1` |
+| Fecha de entrega | `[AAAA-MM-DD]` |
+| Integrantes | Andrik H. García Morales `[agregar resto del equipo]` |
+| Corrida de Actions que generó Plata/Oro | `[URL de la corrida en verde]` |
 
-## 3. Resultados (copiar de `data/reportes/reporte_calidad.json`)
+## 1. Arquitectura
+
+```
+E0/data/bronze/  (JSON crudo, lo escribe el extractor de E0)
+      │
+      ▼  src/integracion.py   lectores por fuente, tipado, revisiones, diario→mensual
+tabla larga unificada
+      │
+      ▼  src/calidad.py       Puerta de Calidad (Pandera, lazy=True)
+      ├──► data/cuarentena/cuarentena.csv   (rechazados + motivo, append-only)
+      ▼
+data/plata/plata_largo.csv
+      │
+      ▼  src/limpieza.py      faltantes, atípicos, escalamiento, discretización, reducción
+data/plata/plata_ancho_limpio.csv
+      │
+      ▼
+data/oro/panel_colima_mensual.csv   (E1 y E2)
+data/oro/panel_entidades.csv        (E3)
+data/oro/parametros_escalado.json
+data/reportes/reporte_calidad.json  (+ diagnóstico de faltantes, atípicos, conflictos)
+```
+
+Todo corre en automático en GitHub Actions (`.github/workflows/captura-bronce.yml`) después de la captura semanal de Bronce.
+
+## 2. Checklist de entregables
+
+| Requisito | Dónde | Estado |
+|---|---|---|
+| Faltantes: diagnóstico MCAR/MAR/MNAR e imputación justificada | `limpieza.diagnosticar_faltantes`, `limpieza.imputar`, notebook §3 | ☑ |
+| Atípicos y ruido (Z robusto, IQR, Isolation Forest) | `limpieza.detectar_atipicos`, `tratar_atipicos`, `isolation_forest`, notebook §4 | ☑ |
+| Normalización Min-Max y Z-score | `limpieza.ajustar_escaladores` / `aplicar_escaladores`, notebook §5 | ☑ |
+| Discretización y jerarquías conceptuales | `limpieza.discretizar`, `jerarquia_tiempo`, notebook §6 | ☑ |
+| Reducción (agregación, ventana, selección de variables) | `integracion.a_mensual`, `limpieza.seleccionar_variables`, notebook §7 | ☑ |
+| Integración y resolución de conflictos de esquema y tipos | `src/integracion.py`, notebook §1 | ☑ |
+| Puerta de Calidad con Pandera y cuarentena con motivo | `src/calidad.py`, notebook §2 | ☑ |
+| Pruebas automáticas | `tests/test_pipeline.py` (13 pruebas) | ☑ |
+| Notebook ejecutado con salidas y datos reales | `docs/E1/limpieza.ipynb` | ☐ |
+| Relatoría de etapa | `docs/relatoria-E1.md` | ☐ completar |
+
+## 3. Cómo ejecutar
+
+```bash
+cd E1/e1
+pip install -r requirements.txt
+python -m unittest discover -s tests -v   # pruebas con Bronce sintética
+python -m src.pipeline --demo             # demo -> data_demo/ (no se sube)
+python -m src.pipeline                    # datos reales de E0/data/bronze -> data/
+jupyter notebook docs/E1/limpieza.ipynb   # Kernel -> Restart & Run All, y guardar
+```
+
+Códigos de salida del pipeline: `0` correcto, `2` Puerta cerrada por falla de esquema, `3` Bronce vacía.
+
+## 4. Reglas de la Puerta de Calidad
+
+| Regla | Columna | Si falla |
+|---|---|---|
+| Esquema estricto (columnas y tipos exactos) | todas | Puerta cerrada, no se escribe Plata |
+| Serie, fuente, entidad y variable en catálogo | `serie`, `fuente`, `entidad`, `variable` | cuarentena |
+| Campos obligatorios no vacíos | `serie` … `fecha`, `origen` | cuarentena |
+| Fecha entre 2005-01-01 y hoy | `fecha` | cuarentena |
+| Valor original numérico o faltante declarado (`N/E`) | `valor_crudo`, `valor` | cuarentena |
+| Valor dentro del rango plausible de su variable | `valor` | cuarentena |
+| Unidad igual a la del catálogo | `unidad` | cuarentena |
+| Un registro por serie y mes | `serie` + `fecha` | cuarentena |
+
+## 5. Resultados (copiar de `data/reportes/reporte_calidad.json`)
+
 | Métrica | Valor |
 |---|---|
-| Filas en Bronce (por fuente) |  |
-| Series de precios (producto·calidad·presentación·origen) | [Producto] |
-| Registros válidos → Plata | [Calidad] |
-| Registros en cuarentena | [Presentacion] |
-| Motivos principales de cuarentena | [Origen] |
-| Periodos distintos en Plata (≥ 36) | [PrecioMin] |
-| % faltante por variable y mecanismo | [PrecioMax] |
-| Atípicos tratados por consenso | [PrecioFrec] |
+| Registros evaluados | `[ ]` |
+| Registros válidos → Plata | `[ ]` |
+| Registros en cuarentena | `[ ]` |
+| Tasa de aprobación | `[ ]` |
+| Conflictos de revisión resueltos | `[ ]` |
+| Celdas imputadas (lineal / estacional) | `[ ]` |
+| Atípicos reemplazados / conservados | `[ ]` |
+| Variables seleccionadas para Oro | `[ ]` |
 
-## 4. Decisiones y supuestos
-- Unidad de análisis: *serie* = producto + calidad + presentación + origen. Todo (imputación, atípicos, normalización) se calcula dentro de cada serie; los precios de productos distintos no son comparables.
-- `N/D` se trata como faltante legítimo, no como error.
-- Imputación: interpolación lineal por serie (máx. 3 observaciones) → mediana de la serie. Sin mediana global; lo no imputable va a cuarentena.
-- Regla de coherencia en la Puerta de Calidad: `precio_min ≤ precio_frec ≤ precio_max`.
-- Atípicos: winsorización a límites IQR solo si ≥2 de 3 detectores coinciden; se conserva `<var>_original`. Series con < 8 observaciones no se evalúan.
-- Registros inválidos nunca se borran: van a cuarentena con `_motivo_cuarentena`.
-- Normalización (Min-Max/Z-Score) por serie sobre todo el histórico; en E2 deberá ajustarse solo con entrenamiento (evitar fuga).
-- [COMPLETAR supuestos propios del sector]
+## 6. Pendientes conocidos
 
-## 5. Calidad (PSP)
-- Registros de tiempo y defectos de E1 actualizados en `calidad/tiempo-<nombre>.csv` y `calidad/defectos-tiempo-MisaelReyes.csv`.
-- Avance de los 3 objetivos de calidad definidos en E0: 
-| Objetivo de calidad | Meta | Resultado en E1 | Evidencia | Estado |
-|---|---|---|---|---|
-| 1. Completitud de la serie histórica: cubrir al menos 36 periodos mensuales en la capa Plata | ≥ 36 periodos | [ ] periodos | data/reportes/reporte_calidad.json (periodos_distintos) | [Cumplido / Parcial] |
-
-| 2. Validez de los datos: ningún registro fuera de rango, incoherente o duplicado en Plata; todo registro rechazado queda en cuarentena con motivo | 0 inválidos en Plata; 100% de rechazados con motivo | [ ] inválidos en Plata; [ ] registros en cuarentena, todos con motivo | tests/test_pipeline.py y data/cuarentena/cuarentena.csv | [Cumplido / Parcial] |
-
-| 3. Calidad del proceso (PSP): corregir el 100% de los defectos detectados y mantener la densidad de defectos en 1 o menos por hora trabajada | 100% corregidos; ≤ 1 defecto/hora | [ ] defectos / [ ] horas = [ ] por hora; [ ]% corregidos | calidad/tiempo-MisaelReyes.csv y calidad/defectos-MisaelReyes.csv | [Cumplido / Parcial] |
+1. Sustituir los IDs `PENDIENTE` de la EMEC en `E0/config/fuentes.json`. Sin ellos, Oro solo tiene INPC, TIIE y tipo de cambio.
+2. Ejecutar el notebook con los datos reales y guardarlo con salidas.

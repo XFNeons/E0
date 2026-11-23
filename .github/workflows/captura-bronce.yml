@@ -1,4 +1,4 @@
-name: Captura capa Bronce
+name: Captura Bronce y pipeline Plata-Oro
 
 on:
   schedule:
@@ -44,14 +44,33 @@ jobs:
           BANXICO_TOKEN: ${{ secrets.BANXICO_TOKEN }}
         run: python src/extractor_bronce.py
 
-      - name: Guardar datos crudos en el repositorio
+      - name: E1 - instalar dependencias del pipeline
+        working-directory: E1/e1
+        run: pip install -r requirements.txt
+
+      - name: E1 - pruebas del pipeline (Bronce sintética)
+        working-directory: E1/e1
+        run: python -m unittest discover -s tests -v
+
+      - name: E1 - Bronce -> Puerta de Calidad -> Plata -> Oro
+        working-directory: E1/e1
+        run: |
+          set +e
+          python -m src.pipeline
+          codigo=$?
+          if [ $codigo -eq 3 ]; then echo "::warning::Aún no hay datos en Bronce; se omite el pipeline"; exit 0; fi
+          exit $codigo
+
+      - name: Guardar datos en el repositorio
+        working-directory: .
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/bronze
+          git add E0/data/bronze
+          git add E1/e1/data 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "Sin cambios en Bronce"
+            echo "Sin cambios en los datos"
           else
-            git commit -m "bronce: captura automática $(date -u +%Y-%m-%dT%H:%MZ)"
+            git commit -m "datos: captura Bronce y pipeline Plata/Oro $(date -u +%Y-%m-%dT%H:%MZ)"
             git push
           fi

@@ -1,105 +1,204 @@
+"""Orquestador Bronce -> Puerta de Calidad -> Plata -> Oro.
+
+Uso (desde E1/e1/):
+    python -m src.pipeline            # usa la Bronce real de E0/data/bronze
+    python -m src.pipeline --demo     # genera Bronce sintética y escribe en data_demo/
 """
-Pipeline E1:  Bronce -> integracion -> Puerta de Calidad -> Plata -> limpieza -> Oro
-Uso:
-    python -m src.pipeline            # usa data/bronce del repositorio
-    python -m src.pipeline --demo     # genera datos sinteticos en data_demo/ y los procesa
-"""
+from __future__ import annotations
+
 import argparse
 import json
+import logging
 import sys
+import tempfile
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
-from . import config as C
-from . import integracion as I
-from . import limpieza as L
-from .calidad import puerta_de_calidad
+from . import config, limpieza
+from .calidad import PuertaCerrada, aplicar_puerta
+from .integracion import integrar
+
+log = logging.getLogger("pipeline")
+
+NOMBRE_COLUMNA = {
+    "emec_menor_ingresos_colima": "ingresos_colima",
+    "emec_menor_personal_colima": "personal_colima",
+    "emec_menor_remuneraciones_colima": "remuneraciones_colima",
+    "emec_menor_ingresos_jalisco": "ingresos_jalisco",
+    "emec_menor_ingresos_michoacan": "ingresos_michoacan",
+    "emec_menor_ingresos_nayarit": "ingresos_nayarit",
+    "inpc_general_nacional": "inpc",
+    "tiie_28d": "tiie",
+    "tipo_cambio_fix": "tipo_cambio",
+}
+OBJETIVO = "ingresos_colima"
 
 
-def ejecutar(base=None) -> dict:
-    R = C.rutas(base)
-    for p in R.values():
-        p.mkdir(parents=True, exist_ok=True)
-    rep = {}
-
-    # 1) carga + esquema comun
-    crudas = {n: I.cargar_fuente(n, R["bronce"]) for n in C.FUENTES}
-    rep["filas_bronce"] = {n: len(d) for n, d in crudas.items()}
-    est = {n: I.estandarizar_esquema(d, n) for n, d in crudas.items()}
-
-    # 2) integracion
-    integrado, cuar_integ = I.integrar(est)
-    rep["filas_integradas"] = len(integrado)
-
-    # 3) Puerta de calidad
-    validos, cuar, motivos = puerta_de_calidad(integrado)
-    if len(cuar_integ):
-        cuar = pd.concat([cuar, cuar_integ], ignore_index=True)
-        motivos["duplicado de llave en fuente secundaria"] = len(cuar_integ)
-
-    # 4) faltantes (diagnostico sobre datos validos, antes de imputar)
-    rep["faltantes_diagnostico"] = L.diagnosticar_faltantes(validos)
-    imputado, rep["imputados"] = L.imputar(validos)
-
-    # series sin datos suficientes: tampoco se borran, van a cuarentena
-    sin_dato = imputado[C.NUMERICAS].isna().any(axis=1)
-    if sin_dato.any():
-        q = imputado[sin_dato].copy()
-        q["_motivo_cuarentena"] = "faltante no imputable (serie sin datos suficientes)"
-        cuar = pd.concat([cuar, q], ignore_index=True)
-        motivos["faltante no imputable (serie sin datos suficientes)"] = int(sin_dato.sum())
-        imputado = imputado[~sin_dato].reset_index(drop=True)
-    rep["puerta_calidad"] = {"validos": len(imputado), "cuarentena": len(cuar), "motivos": motivos}
-    cuar.to_csv(R["cuarentena"] / "cuarentena.csv", index=False, encoding="utf-8")
-
-    # 5) atipicos
-    flag = L.detectar_atipicos(imputado)
-    limpio, rep["atipicos"] = L.tratar_atipicos(flag)
-    plata_cols = [c for c in limpio.columns
-                  if not any(s in c for s in ["_lim_inf", "_lim_sup", "_atipico_iqr",
-                                              "_atipico_zrob", "_atipico_if"])]
-    plata = limpio[plata_cols]
-    plata.to_csv(R["plata"] / "plata.csv", index=False)
-
-    # 6) Oro: normalizacion, discretizacion, reduccion
-    oro = L.discretizar(L.normalizar(plata))
-    keep, info_sel = L.seleccionar_variables(oro)
-    rep["seleccion_variables"] = {"conservadas": keep, **info_sel}
-    oro.to_csv(R["oro"] / "oro_observaciones.csv", index=False)
-    agg = L.agregar_periodo(oro)
-    agg.to_csv(R["oro"] / "oro_agregado.csv", index=False)
-
-    # 7) cobertura historica (requisito de la rubrica: >= 36 periodos)
-    per = plata["periodo"].dt.to_period(C.FRECUENCIA_OBJETIVO)
-    rep["series"] = int(plata[C.GRUPO].nunique())
-    rep["periodos_distintos"] = int(per.nunique())
-    por_serie = plata.assign(_p=per).groupby(C.GRUPO)["_p"].nunique()
-    rep["series_con_min_periodos"] = int((por_serie >= C.MIN_PERIODOS).sum())
-    rep["cumple_min_periodos"] = rep["periodos_distintos"] >= C.MIN_PERIODOS
-    with open(R["reportes"] / "reporte_calidad.json", "w", encoding="utf-8") as f:
-        json.dump(rep, f, indent=2, ensure_ascii=False, default=str)
-    return rep
+def a_ancho(plata: pd.DataFrame) -> pd.DataFrame:
+    ancho = (plata.assign(col=plata["serie"].map(NOMBRE_COLUMNA))
+             .pivot(index="fecha", columns="col", values="valor").sort_index())
+    ancho = ancho.reindex(pd.date_range(ancho.index.min(), ancho.index.max(), freq="MS"))
+    ancho.columns.name = None
+    ancho.index.name = "fecha"
+    return ancho
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--demo", action="store_true", help="usar datos sinteticos en data_demo/")
-    a = ap.parse_args()
-    base = None
-    if a.demo:
-        from .demo_datos import generar
-        base = C.RAIZ / "data_demo"
-        generar(base / "bronce")
-    rep = ejecutar(base)
-    pc = rep["puerta_calidad"]
-    print(f"Bronce: {rep['filas_bronce']} | validos -> Plata: {pc['validos']} | cuarentena: {pc['cuarentena']}")
-    for m, n in pc["motivos"].items():
-        print(f"   - {m}: {n}")
-    print(f"Series: {rep['series']} | periodos ({C.FRECUENCIA_OBJETIVO}): {rep['periodos_distintos']} "
-          f"(>= {C.MIN_PERIODOS}: {rep['cumple_min_periodos']}) | series con >= {C.MIN_PERIODOS} periodos: "
-          f"{rep['series_con_min_periodos']}")
-    sys.exit(0 if rep["cumple_min_periodos"] else 1)
+def limpiar(ancho: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Atípicos (sobre lo observado) -> imputación de faltantes interiores."""
+    limpio, metodos, diags = pd.DataFrame(index=ancho.index), {}, []
+    for col in ancho.columns:
+        observada = ancho[col]
+        primero, ultimo = observada.first_valid_index(), observada.last_valid_index()
+        tramo = observada.loc[primero:ultimo]
+        tratada, diag = limpieza.tratar_atipicos(tramo)
+        # Lo que tratar_atipicos interpoló fueron picos; los faltantes originales se imputan aparte.
+        tratada[tramo.isna()] = np.nan
+        imputada, metodo = limpieza.imputar(tratada)
+        metodo[diag["tratamiento"].eq("reemplazado_por_interpolacion")] = "atipico_reemplazado"
+        limpio[col] = imputada.reindex(ancho.index)
+        metodos[col] = metodo.reindex(ancho.index).fillna("fuera_de_rango_de_la_serie")
+        diags.append(diag.assign(serie=col).reset_index(names="fecha"))
+    atipicos = pd.concat(diags, ignore_index=True)
+    atipicos = atipicos[atipicos["atipico_z"] | atipicos["atipico_iqr"]]
+    return limpio, {"metodos": pd.DataFrame(metodos), "atipicos": atipicos}
+
+
+def construir_oro(limpio: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], dict]:
+    # Reducción 1: ventana temporal común para el análisis
+    df = limpio.loc[config.FECHA_INICIO_ORO:].copy()
+
+    # Variables derivadas
+    for col in [c for c in df.columns if c.startswith(("ingresos", "personal", "remuneraciones"))]:
+        df[f"{col}_crec_anual"] = df[col].pct_change(12, fill_method=None) * 100
+    if "inpc" in df:
+        df["inflacion_anual"] = df["inpc"].pct_change(12, fill_method=None) * 100
+    if f"{OBJETIVO}_crec_anual" in df:
+        df["ingresos_crec_anual"] = df[f"{OBJETIVO}_crec_anual"]
+
+    # Fin del periodo de entrenamiento: 12 meses antes del último dato observado de la objetivo
+    ref = OBJETIVO if OBJETIVO in df else df.columns[0]
+    fin_entrenamiento = df[ref].last_valid_index() - pd.DateOffset(months=config.MESES_PRUEBA)
+
+    # Atípicos multivariados (Isolation Forest) sobre el crecimiento anual de Colima
+    vect = [c for c in ["ingresos_colima_crec_anual", "personal_colima_crec_anual",
+                        "remuneraciones_colima_crec_anual"] if c in df]
+    df["atipico_multivariado"] = limpieza.isolation_forest(df[vect]) if len(vect) >= 2 else False
+
+    # Reducción 2: selección de variables continuas para el panel de E1/E2
+    candidatas = [c for c in ["ingresos_colima", "personal_colima", "remuneraciones_colima",
+                              "inpc", "tiie", "tipo_cambio"] if c in df]
+    seleccion, descartes = limpieza.seleccionar_variables(df[candidatas].dropna(), [OBJETIVO])
+
+    # Escalamiento ajustado solo con entrenamiento
+    parametros = limpieza.ajustar_escaladores(df, seleccion, fin_entrenamiento)
+    escaladas = limpieza.aplicar_escaladores(df, parametros)
+
+    # Discretización y jerarquía de tiempo
+    discretas = limpieza.discretizar(df, fin_entrenamiento)
+    tiempo = limpieza.jerarquia_tiempo(df.index)
+
+    columnas_panel = (seleccion + [c for c in ["ingresos_crec_anual", "inflacion_anual"] if c in df]
+                      + ["atipico_multivariado"])
+    panel = pd.concat([tiempo, df[columnas_panel], escaladas, discretas], axis=1)
+    panel.insert(0, "conjunto", np.where(panel.index <= fin_entrenamiento, "entrenamiento", "prueba"))
+    panel.insert(1, "entidad", "Colima")
+    panel.insert(2, "region", config.REGION["Colima"])
+    panel.insert(3, "sector", config.SECTOR["ingresos"])
+
+    # Panel por entidad (E3): formato largo con jerarquía geográfica
+    estados = [c for c in df.columns if c.startswith("ingresos_") and not c.endswith("crec_anual")]
+    entidades = []
+    for col in estados:
+        nombre = {"colima": "Colima", "jalisco": "Jalisco", "michoacan": "Michoacán",
+                  "nayarit": "Nayarit"}.get(col.split("_", 1)[1], col)
+        entidades.append(pd.DataFrame({
+            "entidad": nombre, "region": config.REGION.get(nombre, ""), "pais": "México",
+            "ingresos": df[col], "ingresos_crec_anual": df.get(f"{col}_crec_anual"),
+            "personal": df.get(f"personal_{col.split('_', 1)[1]}"),
+            "remuneraciones": df.get(f"remuneraciones_{col.split('_', 1)[1]}"),
+        }, index=df.index).join(tiempo[["trimestre", "anio"]]))
+    panel_entidades = (pd.concat(entidades).reset_index(names="fecha")
+                       if entidades else pd.DataFrame())
+
+    info = {"fin_entrenamiento": str(fin_entrenamiento.date()),
+            "variables_seleccionadas": seleccion,
+            "variables_descartadas": descartes.to_dict("records"),
+            "parametros_escalado": parametros,
+            "meses_atipico_multivariado": [str(d.date()) for d in df.index[df["atipico_multivariado"]]],
+            "filas_panel": int(len(panel)), "filas_panel_entidades": int(len(panel_entidades))}
+    return {"panel_colima_mensual": panel.reset_index(names="fecha"),
+            "panel_entidades": panel_entidades}, info
+
+
+def correr(bronce: Path | None = None, salida: Path | None = None) -> dict:
+    r = config.rutas(bronce, salida).crear()
+    log.info("Bronce: %s", r.bronce)
+
+    largo, integ = integrar(r.bronce)
+    integ["conflictos"].to_csv(r.reportes / "conflictos_revision.csv", index=False)
+
+    validos, cuarentena, puerta = aplicar_puerta(largo, r)
+    log.info("Puerta de Calidad: %d válidos, %d a cuarentena", puerta["registros_validos"],
+             puerta["registros_en_cuarentena"])
+    validos.to_csv(r.plata / "plata_largo.csv", index=False)
+
+    ancho = a_ancho(validos)
+    faltantes = limpieza.diagnosticar_faltantes(ancho)
+    faltantes.to_csv(r.reportes / "diagnostico_faltantes.csv", index=False)
+
+    limpio, detalle = limpiar(ancho)
+    detalle["atipicos"].to_csv(r.reportes / "atipicos.csv", index=False)
+    (detalle["metodos"].reset_index(names="fecha")
+     .to_csv(r.reportes / "metodo_por_celda.csv", index=False))
+    limpio.reset_index(names="fecha").to_csv(r.plata / "plata_ancho_limpio.csv", index=False)
+
+    tablas, oro = construir_oro(limpio)
+    for nombre, tabla in tablas.items():
+        tabla.to_csv(r.oro / f"{nombre}.csv", index=False)
+    (r.oro / "parametros_escalado.json").write_text(
+        json.dumps(oro["parametros_escalado"], indent=2, ensure_ascii=False), encoding="utf-8")
+
+    metodos = detalle["metodos"].stack().value_counts().to_dict()
+    reporte = {
+        "integracion": integ["resumen"],
+        "puerta_de_calidad": puerta,
+        "faltantes": faltantes.to_dict("records"),
+        "celdas_por_metodo": {k: int(v) for k, v in metodos.items()},
+        "atipicos": {
+            "detectados": int(len(detalle["atipicos"])),
+            "por_tratamiento": detalle["atipicos"]["tratamiento"].value_counts().to_dict(),
+        },
+        "oro": {k: v for k, v in oro.items() if k != "parametros_escalado"},
+    }
+    (r.reportes / "reporte_calidad.json").write_text(
+        json.dumps(reporte, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    log.info("Oro: %s", ", ".join(f"{k} ({len(v)} filas)" for k, v in tablas.items()))
+    return reporte
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--demo", action="store_true", help="Usar Bronce sintética (no son datos reales)")
+    ap.add_argument("--bronce", type=Path, help="Carpeta Bronce alternativa")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        if args.demo:
+            from .demo_datos import generar
+            with tempfile.TemporaryDirectory() as tmp:
+                correr(generar(Path(tmp)), config.PAQUETE / "data_demo")
+        else:
+            correr(args.bronce)
+    except PuertaCerrada as e:
+        log.error("%s", e)
+        return 2
+    except FileNotFoundError as e:
+        log.error("%s", e)
+        return 3
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

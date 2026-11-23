@@ -1,0 +1,5 @@
+fecha,inicio,fin,interrupcion_min,delta_min,fase,actividad,entregable,comentarios
+2026-11-22,,,0,,Planeacion,Lectura de la consigna E1 y diseno del flujo Bronce-Plata-Oro,docs/E1/ENTREGA.md,Registrar horas reales
+2026-11-22,,,0,,Codificacion,Integracion de fuentes y Puerta de Calidad con Pandera,src/integracion.py; src/calidad.py,
+2026-11-22,,,0,,Codificacion,Limpieza: faltantes atipicos escalamiento discretizacion reduccion,src/limpieza.py,
+2026-11-22,,,0,,Pruebas,Pruebas con Bronce sintetica,tests/test_pipeline.py,
